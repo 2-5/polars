@@ -367,10 +367,6 @@ macro_rules! impl_dyn_series {
                 ChunkShift::shift(&self.0, periods).into_series()
             }
 
-            fn fill_null(&self, strategy: FillNullStrategy) -> PolarsResult<Series> {
-                ChunkFillNull::fill_null(&self.0, strategy).map(|ca| ca.into_series())
-            }
-
             fn _sum_as_series(&self) -> Series {
                 ChunkAggSeries::sum_as_series(&self.0)
             }
@@ -424,11 +420,6 @@ macro_rules! impl_dyn_series {
             #[cfg(feature = "checked_arithmetic")]
             fn checked_div(&self, rhs: &Series) -> PolarsResult<Series> {
                 self.0.checked_div(rhs)
-            }
-
-            #[cfg(feature = "is_first")]
-            fn is_first(&self) -> PolarsResult<BooleanChunked> {
-                self.0.is_first()
             }
 
             #[cfg(feature = "mode")]

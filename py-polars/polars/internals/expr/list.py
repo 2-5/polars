@@ -234,10 +234,7 @@ class ExprListNameSpace:
             return self.concat(pli.Series([other]))
 
         other_list: list[pli.Expr | str | pli.Series]
-        if not isinstance(other, list):
-            other_list = [other]
-        else:
-            other_list = copy.copy(other)  # type: ignore[arg-type]
+        other_list = [other] if not isinstance(other, list) else copy.copy(other)  # type: ignore[arg-type]
 
         other_list.insert(0, pli.wrap_expr(self._pyexpr))
         return pli.concat_list(other_list)
@@ -486,14 +483,39 @@ class ExprListNameSpace:
 
         Examples
         --------
-        >>> s = pl.Series("a", [[1, 2, 3, 4], [10, 2, 1]])
-        >>> s.arr.diff()
-        shape: (2,)
-        Series: 'a' [list[i64]]
-        [
-            [null, 1, ... 1]
-            [null, -8, -1]
-        ]
+        >>> df = pl.DataFrame({"n": [[1, 2, 3, 4], [10, 2, 1]]})
+        >>> df.select(pl.col("n").arr.diff())
+        shape: (2, 1)
+        ┌──────────────────┐
+        │ n                │
+        │ ---              │
+        │ list[i64]        │
+        ╞══════════════════╡
+        │ [null, 1, ... 1] │
+        │ [null, -8, -1]   │
+        └──────────────────┘
+
+        >>> df.select(pl.col("n").arr.diff(n=2))
+        shape: (2, 1)
+        ┌─────────────────────┐
+        │ n                   │
+        │ ---                 │
+        │ list[i64]           │
+        ╞═════════════════════╡
+        │ [null, null, ... 2] │
+        │ [null, null, -9]    │
+        └─────────────────────┘
+
+        >>> df.select(pl.col("n").arr.diff(n=2, null_behavior="drop"))
+        shape: (2, 1)
+        ┌───────────┐
+        │ n         │
+        │ ---       │
+        │ list[i64] │
+        ╞═══════════╡
+        │ [2, 2]    │
+        │ [-9]      │
+        └───────────┘
 
         """
         return pli.wrap_expr(self._pyexpr.lst_diff(n, null_behavior))

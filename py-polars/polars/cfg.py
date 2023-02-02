@@ -22,6 +22,7 @@ except ImportError:
 # which 'POLARS_' environment variables are recognised, as there are other lower-level
 # and/or experimental settings that should not be saved or reset with the Config vars.
 POLARS_CFG_ENV_VARS = {
+    "POLARS_AUTO_STRUCTIFY",
     "POLARS_FMT_MAX_COLS",
     "POLARS_FMT_MAX_ROWS",
     "POLARS_FMT_STR_LEN",
@@ -37,8 +38,6 @@ POLARS_CFG_ENV_VARS = {
     "POLARS_TABLE_WIDTH",
     "POLARS_VERBOSE",
 }
-# register Config-local attributes (with their defaults) here
-POLARS_CFG_LOCAL_VARS = {"with_columns_kwargs": True}
 
 
 class Config:
@@ -72,10 +71,6 @@ class Config:
         """Reset any Config options that were set within the scope."""
         self.restore_defaults().load(self._original_state)
 
-    # note: class-local attributes can be used for options that don't have
-    # a Rust component (so, no need to register environment variables).
-    with_columns_kwargs: bool = True
-
     @classmethod
     def load(cls, cfg: str) -> type[Config]:
         """
@@ -102,7 +97,7 @@ class Config:
         Notes
         -----
         This method operates by removing all Config options from the environment,
-        and then setting any class-local flags back to their default value.
+        and then setting any local (non-env) options back to their default value.
 
         Examples
         --------
@@ -111,8 +106,6 @@ class Config:
         """
         for var in POLARS_CFG_ENV_VARS:
             os.environ.pop(var, None)
-        for flag, value in POLARS_CFG_LOCAL_VARS.items():
-            setattr(cls, flag, value)
         cls.set_fmt_float()
         return cls
 
@@ -131,9 +124,10 @@ class Config:
             for key in sorted(POLARS_CFG_ENV_VARS)
             if (key in os.environ)
         }
-        config_vars = {attr: getattr(cls, attr) for attr in POLARS_CFG_LOCAL_VARS}
+        # note: 'local' vars are unused; preserved here for
+        # backwards-compatibility with previously-saved configs
         return json.dumps(
-            {"environment": environment_vars, "local": config_vars},
+            {"environment": environment_vars, "local": {}},
             separators=(",", ":"),
         )
 
@@ -185,6 +179,12 @@ class Config:
         """
         fmt = "ASCII_FULL_CONDENSED" if active else "UTF8_FULL_CONDENSED"
         os.environ["POLARS_FMT_TABLE_FORMATTING"] = fmt
+        return cls
+
+    @classmethod
+    def set_auto_structify(cls, active: bool = False) -> type[Config]:
+        """Allow multi-output expressions to be automatically turned into Structs."""
+        os.environ["POLARS_AUTO_STRUCTIFY"] = str(int(active))
         return cls
 
     @classmethod

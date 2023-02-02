@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import typing
@@ -19,7 +20,6 @@ from typing import (
 )
 
 from polars import internals as pli
-from polars.cfg import Config
 from polars.datatypes import (
     DTYPE_TEMPORAL_UNITS,
     N_INFER_DEFAULT,
@@ -48,6 +48,7 @@ from polars.dependencies import pyarrow as pa
 from polars.internals import selection_to_pyexpr_list
 from polars.internals.lazyframe.groupby import LazyGroupBy
 from polars.internals.slice import LazyPolarsSlice
+from polars.internals.type_aliases import PythonLiteral
 from polars.utils import (
     _in_notebook,
     _prepare_row_count_args,
@@ -57,7 +58,7 @@ from polars.utils import (
 )
 
 try:
-    from polars.polars import PyLazyFrame
+    from polars.polars import PyExpr, PyLazyFrame
 
     _DOCUMENTING = False
 except ImportError:
@@ -77,6 +78,7 @@ if TYPE_CHECKING:
         FillNullStrategy,
         JoinStrategy,
         ParallelStrategy,
+        PolarsExprType,
         RollingInterpolationMethod,
         StartBy,
         UniqueKeepStrategy,
@@ -230,6 +232,7 @@ class LazyFrame:
             rechunk,
             _prepare_row_count_args(row_count_name, row_count_offset),
             low_memory,
+            cloud_options=storage_options,
         )
         return self
 
@@ -505,7 +508,7 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
 <i>naive plan: (run <b>LazyFrame.describe_optimized_plan()</b> to see the optimized plan)</i>
     <p></p>
     <div>{insert}</div>\
-"""  # noqa: E501
+"""
 
     @overload
     def write_json(self, file: None = ...) -> str:
@@ -1556,12 +1559,13 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         self: LDF,
         exprs: (
             str
-            | pli.Expr
+            | PolarsExprType
+            | PythonLiteral
             | pli.Series
-            | Iterable[str | pli.Expr | pli.Series | pli.WhenThen | pli.WhenThenThen]
+            | Iterable[str | PolarsExprType | PythonLiteral | pli.Series]
             | None
         ) = None,
-        **named_exprs: Any,
+        **named_exprs: PolarsExprType | PythonLiteral | pli.Series | None,
     ) -> LDF:
         """
         Select columns from this DataFrame.
@@ -1575,14 +1579,14 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
 
         Examples
         --------
-        >>> df = pl.DataFrame(
+        >>> ldf = pl.DataFrame(
         ...     {
         ...         "foo": [1, 2, 3],
         ...         "bar": [6, 7, 8],
         ...         "ham": ["a", "b", "c"],
         ...     }
         ... ).lazy()
-        >>> df.select("foo").collect()
+        >>> ldf.select("foo").collect()
         shape: (3, 1)
         ┌─────┐
         │ foo │
@@ -1593,7 +1597,7 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 2   │
         │ 3   │
         └─────┘
-        >>> df.select(["foo", "bar"]).collect()
+        >>> ldf.select(["foo", "bar"]).collect()
         shape: (3, 2)
         ┌─────┬─────┐
         │ foo ┆ bar │
@@ -1605,7 +1609,7 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 3   ┆ 8   │
         └─────┴─────┘
 
-        >>> df.select(pl.col("foo") + 1).collect()
+        >>> ldf.select(pl.col("foo") + 1).collect()
         shape: (3, 1)
         ┌─────┐
         │ foo │
@@ -1617,7 +1621,7 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 4   │
         └─────┘
 
-        >>> df.select([pl.col("foo") + 1, pl.col("bar") + 1]).collect()
+        >>> ldf.select([pl.col("foo") + 1, pl.col("bar") + 1]).collect()
         shape: (3, 2)
         ┌─────┬─────┐
         │ foo ┆ bar │
@@ -1629,23 +1633,30 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 4   ┆ 9   │
         └─────┴─────┘
 
-        >>> df.select(pl.when(pl.col("foo") > 2).then(10).otherwise(0)).collect()
+        >>> ldf.select(
+        ...     value=pl.when(pl.col("foo") > 2).then(10).otherwise(0),
+        ... ).collect()
         shape: (3, 1)
-        ┌─────────┐
-        │ literal │
-        │ ---     │
-        │ i32     │
-        ╞═════════╡
-        │ 0       │
-        │ 0       │
-        │ 10      │
-        └─────────┘
+        ┌───────┐
+        │ value │
+        │ ---   │
+        │ i32   │
+        ╞═══════╡
+        │ 0     │
+        │ 0     │
+        │ 10    │
+        └───────┘
 
-        Note that, when using kwargs syntax, expressions with multiple
-        outputs are automatically instantiated as Struct columns:
+        Expressions with multiple outputs can be automatically instantiated as Structs
+        by enabling the experimental setting ``Config.set_auto_structify(True)``:
 
         >>> from polars.datatypes import INTEGER_DTYPES
-        >>> df.select(is_odd=(pl.col(INTEGER_DTYPES) % 2).suffix("_is_odd")).collect()
+        >>> with pl.Config() as cfg:
+        ...     cfg.set_auto_structify(True)  # doctest: +IGNORE_RESULT
+        ...     ldf.select(
+        ...         is_odd=(pl.col(INTEGER_DTYPES) % 2).suffix("_is_odd"),
+        ...     ).collect()
+        ...
         shape: (3, 1)
         ┌───────────┐
         │ is_odd    │
@@ -1663,9 +1674,12 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         elif exprs is None:
             exprs = []
 
-        exprs = pli.selection_to_pyexpr_list(exprs)
+        structify = bool(int(os.environ.get("POLARS_AUTO_STRUCTIFY", 0)))
+        exprs = pli.selection_to_pyexpr_list(exprs, structify=structify)
         exprs.extend(
-            pli.expr_to_lit_or_expr(expr, structify=True)._pyexpr.alias(name)
+            pli.expr_to_lit_or_expr(
+                expr, structify=structify, name=name, str_to_lit=False
+            )._pyexpr
             for name, expr in named_exprs.items()
         )
         return self._from_pyldf(self._ldf.select(exprs))
@@ -1883,6 +1897,9 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
 
         - "1i"      # length 1
         - "10i"     # length 10
+
+        .. warning::
+            The index column must be sorted in ascending order.
 
         Parameters
         ----------
@@ -2108,12 +2125,9 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 4               ┆ 7               ┆ 4   ┆ ["C"]           │
         └─────────────────┴─────────────────┴─────┴─────────────────┘
 
-        """  # noqa: E501
+        """  # noqa: W505
         if offset is None:
-            if period is None:
-                offset = f"-{every}"
-            else:
-                offset = "0ns"
+            offset = f"-{every}" if period is None else "0ns"
 
         if period is None:
             period = every
@@ -2271,16 +2285,10 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
             raise ValueError("You should pass the column to join on as an argument.")
 
         by_left_: Sequence[str] | None
-        if isinstance(by_left, str):
-            by_left_ = [by_left]
-        else:
-            by_left_ = by_left
+        by_left_ = [by_left] if isinstance(by_left, str) else by_left
 
         by_right_: Sequence[str] | None
-        if isinstance(by_right, (str, pli.Expr)):
-            by_right_ = [by_right]
-        else:
-            by_right_ = by_right
+        by_right_ = [by_right] if isinstance(by_right, (str, pli.Expr)) else by_right
 
         if isinstance(by, str):
             by_left_ = [by]
@@ -2455,11 +2463,18 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
 
     def with_columns(
         self: LDF,
-        exprs: pli.Expr | pli.Series | Sequence[pli.Expr | pli.Series] | None = None,
-        **named_exprs: Any,
+        exprs: (
+            str
+            | PolarsExprType
+            | PythonLiteral
+            | pli.Series
+            | Iterable[str | PolarsExprType | PythonLiteral | pli.Series]
+            | None
+        ) = None,
+        **named_exprs: PolarsExprType | PythonLiteral | pli.Series | None,
     ) -> LDF:
         """
-        Return a new LazyFrame with the columns added, if new, or replaced.
+        Return a new LazyFrame with the columns added (if new), or replaced.
 
         Notes
         -----
@@ -2553,12 +2568,15 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         │ 4   ┆ 13.0 ┆ true  ┆ 52.0 ┆ false │
         └─────┴──────┴───────┴──────┴───────┘
 
-        Note that, when using kwargs syntax, expressions with multiple
-        outputs are automatically instantiated as Struct columns:
+        Expressions with multiple outputs can be automatically instantiated as Structs
+        by enabling the experimental setting ``Config.set_auto_structify(True)``:
 
-        >>> ldf.drop("c").with_columns(
-        ...     diffs=pl.col(["a", "b"]).diff().suffix("_diff"),
-        ... ).collect()
+        >>> with pl.Config() as cfg:
+        ...     cfg.set_auto_structify(True)  # doctest: +IGNORE_RESULT
+        ...     ldf.drop("c").with_columns(
+        ...         diffs=pl.col(["a", "b"]).diff().suffix("_diff"),
+        ...     ).collect()
+        ...
         shape: (4, 3)
         ┌─────┬──────┬─────────────┐
         │ a   ┆ b    ┆ diffs       │
@@ -2572,29 +2590,20 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         └─────┴──────┴─────────────┘
 
         """
-        if named_exprs and not Config.with_columns_kwargs:
-            raise RuntimeError(
-                "**kwargs support requires `pl.Config.with_columns_kwargs = True`"
-            )
-        elif exprs is None and not named_exprs:
+        if exprs is None and not named_exprs:
             raise ValueError("Expected at least one of 'exprs' or **named_exprs")
 
-        if exprs is None:
-            exprs = []
-        elif isinstance(exprs, pli.Expr):
-            exprs = [exprs]
-        elif isinstance(exprs, pli.Series):
-            exprs = [pli.lit(exprs)]
-        else:
-            exprs = list(exprs)
-
+        structify = bool(int(os.environ.get("POLARS_AUTO_STRUCTIFY", 0)))
+        exprs = pli.selection_to_pyexpr_list(exprs, structify=structify)
         exprs.extend(
-            pli.expr_to_lit_or_expr(expr, structify=True).alias(name)
+            pli.expr_to_lit_or_expr(expr, structify=structify, name=name)
             for name, expr in named_exprs.items()
         )
         pyexprs = []
         for e in exprs:
-            if isinstance(e, pli.Expr):
+            if isinstance(e, PyExpr):
+                pyexprs.append(e)
+            elif isinstance(e, pli.Expr):
                 pyexprs.append(e._pyexpr)
             elif isinstance(e, pli.Series):
                 pyexprs.append(pli.lit(e)._pyexpr)
@@ -3805,6 +3814,7 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         no_optimizations: bool = False,
         schema: None | SchemaDict = None,
         validate_output_schema: bool = True,
+        streamable: bool = False,
     ) -> LDF:
         """
         Apply a custom function.
@@ -3831,6 +3841,10 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
             the output schema of this function will be checked with the expected schema.
             Setting this to ``False`` will not do this check, but may lead to hard to
             debug bugs.
+        streamable
+            Whether the function that is given is eligible ot running in the streaming
+            engine. That means that the function must produce the same result if it
+            is exectuted on batches as it would when executed on the full dataset.
 
         Warnings
         --------
@@ -3867,8 +3881,9 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
                 predicate_pushdown,
                 projection_pushdown,
                 slice_pushdown,
-                schema,
-                validate_output_schema,
+                streamable=streamable,
+                schema=schema,
+                validate_output=validate_output_schema,
             )
         )
 

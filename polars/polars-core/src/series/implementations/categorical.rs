@@ -351,11 +351,6 @@ impl SeriesTrait for SeriesWrap<CategoricalChunked> {
         self.with_state(false, |ca| ca.shift(periods)).into_series()
     }
 
-    fn fill_null(&self, strategy: FillNullStrategy) -> PolarsResult<Series> {
-        self.try_with_state(false, |cats| cats.fill_null(strategy))
-            .map(|ca| ca.into_series())
-    }
-
     fn _sum_as_series(&self) -> Series {
         CategoricalChunked::full_null(self.0.logical().name(), 1).into_series()
     }
@@ -401,11 +396,6 @@ impl SeriesTrait for SeriesWrap<CategoricalChunked> {
             .cast(&DataType::List(Box::new(self.dtype().clone())))
             .unwrap();
         casted.list().unwrap().clone()
-    }
-
-    #[cfg(feature = "is_first")]
-    fn is_first(&self) -> PolarsResult<BooleanChunked> {
-        self.0.logical().is_first()
     }
 
     #[cfg(feature = "mode")]

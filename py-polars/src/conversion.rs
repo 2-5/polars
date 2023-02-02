@@ -125,10 +125,10 @@ impl<'a> FromPyObject<'a> for Wrap<BooleanChunked> {
 
 impl<'a> FromPyObject<'a> for Wrap<Utf8Chunked> {
     fn extract(obj: &'a PyAny) -> PyResult<Self> {
-        let (seq, len) = get_pyseq(obj)?;
+        let len = obj.len()?;
         let mut builder = Utf8ChunkedBuilder::new("", len, len * 25);
 
-        for res in seq.iter()? {
+        for res in obj.iter()? {
             let item = res?;
             match item.extract::<&str>() {
                 Ok(val) => builder.append_value(val),
@@ -281,6 +281,7 @@ impl ToPyObject for Wrap<DataType> {
             DataType::UInt64 => pl.getattr("UInt64").unwrap().into(),
             DataType::Float32 => pl.getattr("Float32").unwrap().into(),
             DataType::Float64 => pl.getattr("Float64").unwrap().into(),
+            DataType::Decimal128(_) => todo!(),
             DataType::Boolean => pl.getattr("Boolean").unwrap().into(),
             DataType::Utf8 => pl.getattr("Utf8").unwrap().into(),
             DataType::Binary => pl.getattr("Binary").unwrap().into(),

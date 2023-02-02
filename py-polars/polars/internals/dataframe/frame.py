@@ -33,6 +33,7 @@ from polars.datatypes import (
     INTEGER_DTYPES,
     N_INFER_DEFAULT,
     Boolean,
+    Categorical,
     DataTypeClass,
     Float64,
     Int8,
@@ -105,6 +106,8 @@ else:
     from typing_extensions import Concatenate, ParamSpec, TypeAlias
 
 if TYPE_CHECKING:
+    from pyarrow.interchange.dataframe import _PyArrowDataFrame
+
     from polars.internals.type_aliases import (
         AsofJoinStrategy,
         AvroCompression,
@@ -119,6 +122,8 @@ if TYPE_CHECKING:
         ParallelStrategy,
         ParquetCompression,
         PivotAgg,
+        PolarsExprType,
+        PythonLiteral,
         RollingInterpolationMethod,
         SizeUnit,
         StartBy,
@@ -1074,7 +1079,9 @@ class DataFrame:
     @property
     def dtypes(self) -> list[PolarsDataType]:
         """
-        Get dtypes of columns in DataFrame. Dtypes can also be found in column headers when printing the DataFrame.
+        Get the datatypes of the columns of this DataFrame.
+
+        The datatypes can also be found in column headers when printing the DataFrame.
 
         Examples
         --------
@@ -1103,7 +1110,7 @@ class DataFrame:
         --------
         schema : Returns a {colname:dtype} mapping.
 
-        """  # noqa: E501
+        """
         return self._df.dtypes()
 
     @property
@@ -1125,6 +1132,42 @@ class DataFrame:
 
         """
         return dict(zip(self.columns, self.dtypes))
+
+    def __dataframe__(
+        self, nan_as_null: bool = False, allow_copy: bool = True
+    ) -> _PyArrowDataFrame:
+        """
+        Convert to a dataframe object implementing the dataframe interchange protocol.
+
+        Parameters
+        ----------
+        nan_as_null
+            Overwrite null values in the data with ``NaN``.
+        allow_copy
+            Allow memory to be copied to perform the conversion. If set to False, causes
+            conversions that are not zero-copy to fail.
+
+        Notes
+        -----
+        Details on the dataframe interchange protocol:
+        https://data-apis.org/dataframe-protocol/latest/index.html
+
+        `nan_as_null` currently has no effect; once support for nullable extension
+        dtypes is added, this value should be propagated to columns.
+
+        """
+        if not _PYARROW_AVAILABLE or int(pa.__version__.split(".")[0]) < 11:
+            raise ImportError(
+                "pyarrow>=11.0.0 is required for converting a Polars dataframe to a"
+                " dataframe interchange object."
+            )
+        if not allow_copy and Categorical in self.schema.values():
+            raise NotImplementedError(
+                "Polars does not offer zero-copy conversion to Arrow for categorical"
+                " columns. Set `allow_copy=True` or cast categorical columns to"
+                " string first."
+            )
+        return self.to_arrow().__dataframe__(nan_as_null, allow_copy)
 
     def _comp(self, other: Any, op: ComparisonOperator) -> DataFrame:
         """Compare a DataFrame with another object."""
@@ -1438,7 +1481,6 @@ class DataFrame:
 
             # df[:, unknown]
             if isinstance(row_selection, slice):
-
                 # multiple slices
                 # df[:, :]
                 if isinstance(col_selection, slice):
@@ -1471,7 +1513,7 @@ class DataFrame:
                             f" boolean mask. Got {len(col_selection)}."
                         )
                     series_list = []
-                    for (i, val) in enumerate(col_selection):
+                    for i, val in enumerate(col_selection):
                         if val:
                             series_list.append(self.to_series(i))
 
@@ -1590,7 +1632,7 @@ class DataFrame:
 
             # todo! we can parallelize this by calling from_numpy
             columns = []
-            for (i, name) in enumerate(key):
+            for i, name in enumerate(key):
                 columns.append(pli.Series(name, value[:, i]))
             self._df = self.with_columns(columns)._df
 
@@ -1834,9 +1876,13 @@ class DataFrame:
 
     def to_dicts(self) -> list[dict[str, Any]]:
         """
-        Convert every row to a dictionary.
+        Convert every row to a dictionary of python-native values.
 
-        Note that this is slow.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Examples
         --------
@@ -2349,10 +2395,7 @@ class DataFrame:
 
             for i, column in enumerate(tbl):
                 # extract the name before casting
-                if column._name is None:
-                    name = f"column_{i}"
-                else:
-                    name = column._name
+                name = f"column_{i}" if column._name is None else column._name
 
                 data[name] = column
 
@@ -2745,9 +2788,9 @@ class DataFrame:
 
         def _parse_column(col_name: str, dtype: PolarsDataType) -> tuple[str, str, str]:
             dtype_str = (
-                f"<{DataTypeClass.string_repr(dtype)}>"
+                f"<{DataTypeClass._string_repr(dtype)}>"
                 if isinstance(dtype, DataTypeClass)
-                else f"<{dtype.string_repr()}>"
+                else f"<{dtype._string_repr()}>"
             )
             val = self[:max_num_values][col_name].to_list()
             val_str = ", ".join(map(str, val))
@@ -3638,6 +3681,9 @@ class DataFrame:
         - "1i"      # length 1
         - "10i"     # length 10
 
+        .. warning::
+            The index column must be sorted in ascending order.
+
         Parameters
         ----------
         index_column
@@ -3856,7 +3902,7 @@ class DataFrame:
         │ 4               ┆ 7               ┆ 4   ┆ ["C"]           │
         └─────────────────┴─────────────────┴─────┴─────────────────┘
 
-        """  # noqa: E501
+        """  # noqa: W505
         return DynamicGroupBy(
             self,
             index_column,
@@ -5136,10 +5182,7 @@ class DataFrame:
         └────────┴────────┴────────┴────────┴────────┴────────┘
 
         """
-        if columns is not None:
-            df = self.select(columns)
-        else:
-            df = self
+        df = self.select(columns) if columns is not None else self
 
         height = df.height
         if how == "vertical":
@@ -5503,12 +5546,13 @@ class DataFrame:
         self: DF,
         exprs: (
             str
-            | pli.Expr
+            | PolarsExprType
+            | PythonLiteral
             | pli.Series
-            | Iterable[str | pli.Expr | pli.Series | pli.WhenThen | pli.WhenThenThen]
+            | Iterable[str | PolarsExprType | PythonLiteral | pli.Series]
             | None
         ) = None,
-        **named_exprs: Any,
+        **named_exprs: PolarsExprType | PythonLiteral | pli.Series | None,
     ) -> DF:
         """
         Select columns from this DataFrame.
@@ -5589,11 +5633,16 @@ class DataFrame:
         │ 10      │
         └─────────┘
 
-        Note that, when using kwargs syntax, expressions with multiple
-        outputs are automatically instantiated as Struct columns:
+        Expressions with multiple outputs can be automatically instantiated as Structs
+        by enabling the experimental setting ``Config.set_auto_structify(True)``:
 
         >>> from polars.datatypes import INTEGER_DTYPES
-        >>> df.select(is_odd=(pl.col(INTEGER_DTYPES) % 2).suffix("_is_odd"))
+        >>> with pl.Config() as cfg:
+        ...     cfg.set_auto_structify(True)  # doctest: +IGNORE_RESULT
+        ...     df.select(
+        ...         is_odd=(pl.col(INTEGER_DTYPES) % 2).suffix("_is_odd"),
+        ...     )
+        ...
         shape: (3, 1)
         ┌───────────┐
         │ is_odd    │
@@ -5612,8 +5661,15 @@ class DataFrame:
 
     def with_columns(
         self,
-        exprs: pli.Expr | pli.Series | Sequence[pli.Expr | pli.Series] | None = None,
-        **named_exprs: Any,
+        exprs: (
+            str
+            | PolarsExprType
+            | PythonLiteral
+            | pli.Series
+            | Iterable[str | PolarsExprType | PythonLiteral | pli.Series]
+            | None
+        ) = None,
+        **named_exprs: PolarsExprType | PythonLiteral | pli.Series | None,
     ) -> DataFrame:
         """
         Return a new DataFrame with the columns added (if new), or replaced.
@@ -5710,12 +5766,15 @@ class DataFrame:
         │ 4   ┆ 13.0 ┆ true  ┆ 52.0 ┆ false │
         └─────┴──────┴───────┴──────┴───────┘
 
-        Note that, when using kwargs syntax, expressions with multiple
-        outputs are automatically instantiated as Struct columns:
+        Expressions with multiple outputs can be automatically instantiated as Structs
+        by enabling the experimental setting ``Config.set_auto_structify(True)``:
 
-        >>> df.drop("c").with_columns(
-        ...     diffs=pl.col(["a", "b"]).diff().suffix("_diff"),
-        ... )
+        >>> with pl.Config() as cfg:
+        ...     cfg.set_auto_structify(True)  # doctest: +IGNORE_RESULT
+        ...     df.drop("c").with_columns(
+        ...         diffs=pl.col(["a", "b"]).diff().suffix("_diff"),
+        ...     )
+        ...
         shape: (4, 3)
         ┌─────┬──────┬─────────────┐
         │ a   ┆ b    ┆ diffs       │
@@ -6695,7 +6754,7 @@ class DataFrame:
 
     def rows(self, named: bool = False) -> list[tuple[Any, ...]] | list[dict[str, Any]]:
         """
-        Returns all data in the DataFrame as a list of rows.
+        Returns all data in the DataFrame as a list of rows of python-native values.
 
         Parameters
         ----------
@@ -6704,14 +6763,20 @@ class DataFrame:
             column name to row value. This is more expensive than returning a regular
             tuple, but allows for accessing values by column name.
 
-        Returns
-        -------
-        A list of tuples (default) or dictionaries of row values.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Warnings
         --------
         Row-iteration is not optimal as the underlying data is stored in columnar form;
         where possible, prefer export via one of the dedicated export/output methods.
+
+        Returns
+        -------
+        A list of tuples (default) or dictionaries of row values.
 
         Examples
         --------
@@ -6754,7 +6819,7 @@ class DataFrame:
         self, named: bool = False, buffer_size: int = 500
     ) -> Iterator[tuple[Any, ...]] | Iterator[dict[str, Any]]:
         """
-        Returns an iterator over the rows of the DataFrame.
+        Returns an iterator over the DataFrame of rows of python-native values.
 
         Parameters
         ----------
@@ -6769,19 +6834,20 @@ class DataFrame:
             the speedup from using the buffer is significant (~2-4x). Setting this
             value to zero disables row buffering.
 
-        Returns
-        -------
-        An iterator of tuples (default) or dictionaries of row values.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Warnings
         --------
         Row iteration is not optimal as the underlying data is stored in columnar form;
         where possible, prefer export via one of the dedicated export/output methods.
 
-        Notes
-        -----
-        If you are planning to materialise all frame data at once you should prefer
-        calling ``rows()``, which will be faster.
+        Returns
+        -------
+        An iterator of tuples (default) or dictionaries of python row values.
 
         Examples
         --------
@@ -6807,9 +6873,15 @@ class DataFrame:
         # note: buffering rows results in a 2-4x speedup over individual calls
         # to ".row(i)", so it should only be disabled in extremely specific cases.
         if buffer_size:
+            load_pyarrow_dicts = (
+                named
+                and _PYARROW_AVAILABLE
+                # note: 'ns' precision instantiates values as pandas types - avoid
+                and not any((getattr(tp, "tu", None) == "ns") for tp in self.dtypes)
+            )
             for offset in range(0, self.height, buffer_size):
                 zerocopy_slice = self.slice(offset, buffer_size)
-                if named and _PYARROW_AVAILABLE:
+                if load_pyarrow_dicts:
                     yield from zerocopy_slice.to_arrow().to_batches()[0].to_pylist()
                 else:
                     rows_chunk = zerocopy_slice.rows(named=False)

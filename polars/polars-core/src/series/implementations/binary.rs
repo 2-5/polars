@@ -300,10 +300,6 @@ impl SeriesTrait for SeriesWrap<BinaryChunked> {
         ChunkShift::shift(&self.0, periods).into_series()
     }
 
-    fn fill_null(&self, strategy: FillNullStrategy) -> PolarsResult<Series> {
-        ChunkFillNull::fill_null(&self.0, strategy).map(|ca| ca.into_series())
-    }
-
     fn _sum_as_series(&self) -> Series {
         ChunkAggSeries::sum_as_series(&self.0)
     }
@@ -327,11 +323,6 @@ impl SeriesTrait for SeriesWrap<BinaryChunked> {
     #[cfg(feature = "repeat_by")]
     fn repeat_by(&self, by: &IdxCa) -> ListChunked {
         RepeatBy::repeat_by(&self.0, by)
-    }
-
-    #[cfg(feature = "is_first")]
-    fn is_first(&self) -> PolarsResult<BooleanChunked> {
-        self.0.is_first()
     }
 
     #[cfg(feature = "mode")]

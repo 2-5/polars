@@ -45,7 +45,7 @@ pub(crate) fn call_lambda_with_series(
     lambda: &PyObject,
     polars_module: &PyObject,
 ) -> PyResult<PyObject> {
-    let pypolars = polars_module.cast_as::<PyModule>(py).unwrap();
+    let pypolars = polars_module.downcast::<PyModule>(py).unwrap();
 
     // create a PySeries struct/object for Python
     let pyseries = PySeries::new(s);
@@ -60,7 +60,11 @@ pub(crate) fn call_lambda_with_series(
 }
 
 /// A python lambda taking two Series
-pub(crate) fn binary_lambda(lambda: &PyObject, a: Series, b: Series) -> PolarsResult<Series> {
+pub(crate) fn binary_lambda(
+    lambda: &PyObject,
+    a: Series,
+    b: Series,
+) -> PolarsResult<Option<Series>> {
     Python::with_gil(|py| {
         // get the pypolars module
         let pypolars = PyModule::import(py, "polars").unwrap();
@@ -104,11 +108,15 @@ pub(crate) fn binary_lambda(lambda: &PyObject, a: Series, b: Series) -> PolarsRe
             let s = out.select_at_idx(0).unwrap().clone();
             PySeries::new(s)
         } else {
-            return Ok(result_series_wrapper.to_series(py, &pypolars.into_py(py), ""));
+            return Ok(Some(result_series_wrapper.to_series(
+                py,
+                &pypolars.into_py(py),
+                "",
+            )));
         };
 
         // Finally get the actual Series
-        Ok(pyseries.series)
+        Ok(Some(pyseries.series))
     })
 }
 
@@ -134,7 +142,7 @@ pub fn map_single(
                 Err(PolarsError::SchemaMisMatch(
                     format!("Expected output type: '{:?}', but got '{:?}'. Set 'return_dtype' to the proper datatype.", output_type, s.dtype()).into()))
             } else {
-                Ok(s)
+                Ok(Some(s))
             }
         })
     };
@@ -160,7 +168,7 @@ pub(crate) fn call_lambda_with_series_slice(
     lambda: &PyObject,
     polars_module: &PyObject,
 ) -> PyObject {
-    let pypolars = polars_module.cast_as::<PyModule>(py).unwrap();
+    let pypolars = polars_module.downcast::<PyModule>(py).unwrap();
 
     // create a PySeries struct/object for Python
     let iter = s.iter().map(|s| {
@@ -199,10 +207,10 @@ pub fn map_mul(
 
             // we return an error, because that will become a null value polars lazy apply list
             if apply_groups && out.is_none(py) {
-                return Err(PolarsError::NoData("".into()));
+                return Ok(None);
             }
 
-            Ok(out.to_series(py, &pypolars, ""))
+            Ok(Some(out.to_series(py, &pypolars, "")))
         })
     };
 

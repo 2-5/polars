@@ -307,7 +307,10 @@ impl PyExpr {
         Ok(self
             .inner
             .clone()
-            .apply(move |s| s.fill_null(strat), GetOutput::same_type())
+            .apply(
+                move |s| s.fill_null(strat).map(Some),
+                GetOutput::same_type(),
+            )
             .with_fmt("fill_null_with_strategy")
             .into())
     }
@@ -351,7 +354,10 @@ impl PyExpr {
     pub fn take_every(&self, n: usize) -> PyExpr {
         self.clone()
             .inner
-            .map(move |s: Series| Ok(s.take_every(n)), GetOutput::same_type())
+            .map(
+                move |s: Series| Ok(Some(s.take_every(n))),
+                GetOutput::same_type(),
+            )
             .with_fmt("take_every")
             .into()
     }
@@ -374,7 +380,7 @@ impl PyExpr {
     pub fn rechunk(&self) -> PyExpr {
         self.inner
             .clone()
-            .map(|s| Ok(s.rechunk()), GetOutput::same_type())
+            .map(|s| Ok(Some(s.rechunk())), GetOutput::same_type())
             .into()
     }
 
@@ -534,6 +540,7 @@ impl PyExpr {
         self.inner.clone().shrink_dtype().into()
     }
 
+    #[pyo3(signature = (fmt, strict, exact, cache))]
     pub fn str_parse_date(
         &self,
         fmt: Option<String>,
@@ -556,6 +563,7 @@ impl PyExpr {
             .into()
     }
 
+    #[pyo3(signature = (fmt, strict, exact, cache, tz_aware, utc, tu))]
     #[allow(clippy::too_many_arguments)]
     pub fn str_parse_datetime(
         &self,
@@ -599,6 +607,7 @@ impl PyExpr {
             .into()
     }
 
+    #[pyo3(signature = (fmt, strict, exact, cache))]
     pub fn str_parse_time(
         &self,
         fmt: Option<String>,
@@ -636,7 +645,7 @@ impl PyExpr {
     pub fn str_slice(&self, start: i64, length: Option<u64>) -> PyExpr {
         let function = move |s: Series| {
             let ca = s.utf8()?;
-            Ok(ca.str_slice(start, length)?.into_series())
+            Ok(Some(ca.str_slice(start, length)?.into_series()))
         };
         self.clone()
             .inner
@@ -656,7 +665,7 @@ impl PyExpr {
     pub fn str_lengths(&self) -> PyExpr {
         let function = |s: Series| {
             let ca = s.utf8()?;
-            Ok(ca.str_lengths().into_series())
+            Ok(Some(ca.str_lengths().into_series()))
         };
         self.clone()
             .inner
@@ -668,7 +677,7 @@ impl PyExpr {
     pub fn str_n_chars(&self) -> PyExpr {
         let function = |s: Series| {
             let ca = s.utf8()?;
-            Ok(ca.str_n_chars().into_series())
+            Ok(Some(ca.str_n_chars().into_series()))
         };
         self.clone()
             .inner
@@ -707,6 +716,7 @@ impl PyExpr {
         self.clone().inner.str().rjust(width, fillchar).into()
     }
 
+    #[pyo3(signature = (pat, literal, strict))]
     pub fn str_contains(&self, pat: PyExpr, literal: Option<bool>, strict: bool) -> PyExpr {
         match literal {
             Some(true) => self.inner.clone().str().contains_literal(pat.inner).into(),
@@ -738,7 +748,7 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.utf8().map(|s| s.hex_encode().into_series()),
+                move |s| s.utf8().map(|s| Some(s.hex_encode().into_series())),
                 GetOutput::same_type(),
             )
             .with_fmt("str.hex_encode")
@@ -749,7 +759,7 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.utf8()?.hex_decode(strict).map(|s| s.into_series()),
+                move |s| s.utf8()?.hex_decode(strict).map(|s| Some(s.into_series())),
                 GetOutput::same_type(),
             )
             .with_fmt("str.hex_decode")
@@ -759,7 +769,7 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.utf8().map(|s| s.base64_encode().into_series()),
+                move |s| s.utf8().map(|s| Some(s.base64_encode().into_series())),
                 GetOutput::same_type(),
             )
             .with_fmt("str.base64_encode")
@@ -771,10 +781,23 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.utf8()?.base64_decode(strict).map(|s| s.into_series()),
+                move |s| {
+                    s.utf8()?
+                        .base64_decode(strict)
+                        .map(|s| Some(s.into_series()))
+                },
                 GetOutput::same_type(),
             )
             .with_fmt("str.base64_decode")
+            .into()
+    }
+
+    pub fn str_parse_int(&self, radix: Option<u32>) -> PyExpr {
+        self.inner
+            .clone()
+            .str()
+            .from_radix(radix)
+            .with_fmt("str.parse_int")
             .into()
     }
 
@@ -783,7 +806,7 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.binary().map(|s| s.hex_encode().into_series()),
+                move |s| s.binary().map(|s| Some(s.hex_encode().into_series())),
                 GetOutput::same_type(),
             )
             .with_fmt("binary.hex_encode")
@@ -794,7 +817,11 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.binary()?.hex_decode(strict).map(|s| s.into_series()),
+                move |s| {
+                    s.binary()?
+                        .hex_decode(strict)
+                        .map(|s| Some(s.into_series()))
+                },
                 GetOutput::same_type(),
             )
             .with_fmt("binary.hex_decode")
@@ -806,7 +833,7 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.binary().map(|s| s.base64_encode().into_series()),
+                move |s| s.binary().map(|s| Some(s.base64_encode().into_series())),
                 GetOutput::same_type(),
             )
             .with_fmt("binary.base64_encode")
@@ -818,7 +845,11 @@ impl PyExpr {
         self.clone()
             .inner
             .map(
-                move |s| s.binary()?.base64_decode(strict).map(|s| s.into_series()),
+                move |s| {
+                    s.binary()?
+                        .base64_decode(strict)
+                        .map(|s| Some(s.into_series()))
+                },
                 GetOutput::same_type(),
             )
             .with_fmt("binary.base64_decode")
@@ -830,7 +861,7 @@ impl PyExpr {
         let function = move |s: Series| {
             let ca = s.utf8()?;
             match ca.json_path_match(&pat) {
-                Ok(ca) => Ok(ca.into_series()),
+                Ok(ca) => Ok(Some(ca.into_series())),
                 Err(e) => Err(PolarsError::ComputeError(format!("{e:?}").into())),
             }
         };
@@ -929,7 +960,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.days().into_series()),
+                |s| Ok(Some(s.duration()?.days().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -938,7 +969,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.hours().into_series()),
+                |s| Ok(Some(s.duration()?.hours().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -947,7 +978,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.minutes().into_series()),
+                |s| Ok(Some(s.duration()?.minutes().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -956,7 +987,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.seconds().into_series()),
+                |s| Ok(Some(s.duration()?.seconds().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -965,7 +996,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.nanoseconds().into_series()),
+                |s| Ok(Some(s.duration()?.nanoseconds().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -974,7 +1005,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.microseconds().into_series()),
+                |s| Ok(Some(s.duration()?.microseconds().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -983,7 +1014,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.duration()?.milliseconds().into_series()),
+                |s| Ok(Some(s.duration()?.milliseconds().into_series())),
                 GetOutput::from_type(DataType::Int64),
             )
             .into()
@@ -1003,7 +1034,7 @@ impl PyExpr {
             .map(
                 |s| {
                     s.timestamp(TimeUnit::Milliseconds)
-                        .map(|ca| (ca / 1000).into_series())
+                        .map(|ca| Some((ca / 1000).into_series()))
                 },
                 GetOutput::from_type(DataType::Int64),
             )
@@ -1045,6 +1076,7 @@ impl PyExpr {
         self.inner.clone().dt().combine(time.inner, tu.0).into()
     }
 
+    #[pyo3(signature = (lambda, window_size, weights, min_periods, center))]
     pub fn rolling_apply(
         &self,
         py: Python,
@@ -1179,6 +1211,7 @@ impl PyExpr {
             .into()
     }
 
+    #[pyo3(signature = (lambda, output_type, agg_list))]
     pub fn map(
         &self,
         lambda: PyObject,
@@ -1193,7 +1226,7 @@ impl PyExpr {
     }
 
     pub fn reinterpret(&self, signed: bool) -> PyExpr {
-        let function = move |s: Series| reinterpret(&s, signed);
+        let function = move |s: Series| reinterpret(&s, signed).map(Some);
         let dt = if signed {
             DataType::Int64
         } else {
@@ -1243,6 +1276,7 @@ impl PyExpr {
         self.inner.clone().interpolate(method.0).into()
     }
 
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_sum(
         &self,
         window_size: &str,
@@ -1262,6 +1296,8 @@ impl PyExpr {
         };
         self.inner.clone().rolling_sum(options).into()
     }
+
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_min(
         &self,
         window_size: &str,
@@ -1281,6 +1317,8 @@ impl PyExpr {
         };
         self.inner.clone().rolling_min(options).into()
     }
+
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_max(
         &self,
         window_size: &str,
@@ -1300,6 +1338,8 @@ impl PyExpr {
         };
         self.inner.clone().rolling_max(options).into()
     }
+
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_mean(
         &self,
         window_size: &str,
@@ -1321,6 +1361,7 @@ impl PyExpr {
         self.inner.clone().rolling_mean(options).into()
     }
 
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_std(
         &self,
         window_size: &str,
@@ -1342,6 +1383,7 @@ impl PyExpr {
         self.inner.clone().rolling_std(options).into()
     }
 
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_var(
         &self,
         window_size: &str,
@@ -1363,6 +1405,7 @@ impl PyExpr {
         self.inner.clone().rolling_var(options).into()
     }
 
+    #[pyo3(signature = (window_size, weights, min_periods, center, by, closed))]
     pub fn rolling_median(
         &self,
         window_size: &str,
@@ -1383,6 +1426,7 @@ impl PyExpr {
         self.inner.clone().rolling_median(options).into()
     }
 
+    #[pyo3(signature = (quantile, interpolation, window_size, weights, min_periods, center, by, closed))]
     #[allow(clippy::too_many_arguments)]
     pub fn rolling_quantile(
         &self,
@@ -1525,6 +1569,7 @@ impl PyExpr {
             .into()
     }
 
+    #[pyo3(signature = (width_strat, name_gen, upper_bound))]
     fn lst_to_struct(
         &self,
         width_strat: Wrap<ListToStructWidthStrategy>,
@@ -1591,7 +1636,7 @@ impl PyExpr {
         self.inner
             .clone()
             .map(
-                |s| Ok(s.to_physical_repr().into_owned()),
+                |s| Ok(Some(s.to_physical_repr().into_owned())),
                 GetOutput::map_dtype(|dt| dt.to_physical()),
             )
             .with_fmt("to_physical")
@@ -1663,7 +1708,7 @@ impl PyExpr {
                 move |s| {
                     Python::with_gil(|py| {
                         let value = value.extract::<Wrap<AnyValue>>(py).unwrap().0;
-                        s.extend_constant(value, n)
+                        s.extend_constant(value, n).map(Some)
                     })
                 },
                 GetOutput::same_type(),

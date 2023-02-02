@@ -440,13 +440,6 @@ impl SeriesTrait for SeriesWrap<DatetimeChunked> {
             .into_series()
     }
 
-    fn fill_null(&self, strategy: FillNullStrategy) -> PolarsResult<Series> {
-        self.0.fill_null(strategy).map(|ca| {
-            ca.into_datetime(self.0.time_unit(), self.0.time_zone().clone())
-                .into_series()
-        })
-    }
-
     fn _sum_as_series(&self) -> Series {
         Int32Chunked::full_null(self.name(), 1)
             .cast(self.dtype())
@@ -519,11 +512,6 @@ impl SeriesTrait for SeriesWrap<DatetimeChunked> {
             .unwrap()
             .clone()
     }
-    #[cfg(feature = "is_first")]
-    fn is_first(&self) -> PolarsResult<BooleanChunked> {
-        self.0.is_first()
-    }
-
     #[cfg(feature = "mode")]
     fn mode(&self) -> PolarsResult<Series> {
         self.0.mode().map(|ca| {
